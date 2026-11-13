@@ -13,7 +13,7 @@ function fetchUrl(url) {
   });
 }
 
-module.exports = async function() {
+async function load() {
   const xml    = await fetchUrl(`https://www.youtube.com/feeds/videos.xml?channel_id=${CHANNEL_ID}`);
   const result = await xml2js.parseStringPromise(xml, { explicitArray: false });
   const entries = result.feed.entry;
@@ -27,4 +27,13 @@ module.exports = async function() {
     description: (entry['media:group']['media:description'] || '').slice(0, 200),
     published:   entry.published
   }));
+}
+
+module.exports = async function() {
+  try {
+    return await load();
+  } catch (err) {
+    console.warn('YouTube feed unavailable, skipping videos:', err.message);
+    return [];
+  }
 };
