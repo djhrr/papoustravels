@@ -22,7 +22,6 @@ permalink: /
     {% endfor %}
   </div>
 
-  {% if youtube.length %}
   <div class="article-list" style="margin-top:26px">
     <h3 style="margin-bottom:12px">Latest from YouTube</h3>
     {% for video in youtube %}
@@ -36,8 +35,8 @@ permalink: /
       </div>
     </a>
     {% endfor %}
+    {% if not youtube.length %}<p>New videos are coming soon. <a href="https://www.youtube.com/channel/UCVn3JYN3YpXpOxn-hacLjYg" target="_blank" rel="noopener" style="color:var(--teal)">Visit the YouTube channel →</a></p>{% endif %}
   </div>
-  {% endif %}
 </section>
 
 <aside class="sidebar">
