@@ -70,8 +70,8 @@ permalink: /admin/
     <p class="subtitle">Sign in to manage your blog</p>
     <div id="setup-fields" style="display:none">
       <div class="field"><label>GitHub Token</label><input type="password" id="login-token" placeholder="github_pat_..." autocomplete="off">
-        <p class="hint">Needed once. It is encrypted with your passphrase and stored in this browser only.</p></div>
-      <div class="field"><label>Choose a passphrase (12+ characters)</label><input type="password" id="setup-pass" autocomplete="new-password"></div>
+        <p class="hint">Needed once. It is encrypted with your passphrase and saved to the site, so your other devices only need the passphrase.</p></div>
+      <div class="field"><label>Choose a passphrase (16+ characters, e.g. 4-5 random words)</label><input type="password" id="setup-pass" autocomplete="new-password"></div>
       <div class="field"><label>Confirm passphrase</label><input type="password" id="setup-pass2" autocomplete="new-password"></div>
     </div>
     <div id="unlock-fields" style="display:none">
@@ -79,7 +79,7 @@ permalink: /admin/
     </div>
     <p class="error-msg" id="login-error" style="display:none"></p>
     <button class="btn btn-primary" id="login-btn" style="width:100%;margin-top:8px" onclick="doLogin()">Unlock</button>
-    <p style="text-align:center;margin:14px 0 0;font-size:.8rem"><a href="#" id="reset-link" onclick="resetSaved(event)" style="color:#888">Forgot passphrase? Reset and re-enter GitHub token</a></p>
+    <p style="text-align:center;margin:14px 0 0;font-size:.8rem"><a href="#" id="reset-link" onclick="resetSaved(event)" style="color:#888">Forgot passphrase or changing token? Start over</a></p>
   </div>
 </div>
 <div id="app" style="display:none">
@@ -195,8 +195,24 @@ async function decryptToken(blob,pass){
   var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(o.i)},await deriveKey(pass,unb64(o.s)),unb64(o.c));
   return new TextDecoder().decode(pt);
 }
-function showMode(){
-  var has=!!localStorage.getItem(ENC_KEY);
+var VAULT_PATH='assets/admin-vault.json',MIN_PASS=16,forceSetup=false,remoteBlob=null;
+async function loadRemoteBlob(){
+  try{
+    var r=await fetch('/'+VAULT_PATH+'?t='+Date.now(),{cache:'no-store'});
+    if(!r.ok)return null;
+    var t=await r.text();JSON.parse(t);return t;
+  }catch(e){return null;}
+}
+async function publishVault(blob,tok){
+  var prev=ghToken;ghToken=tok;
+  try{
+    var sha;
+    try{sha=(await ghGet(VAULT_PATH)).sha;}catch(e){}
+    await ghPut(VAULT_PATH,strToB64(blob),'Update admin vault',sha);
+  }finally{ghToken=prev;}
+}
+async function showMode(){
+  var has=!forceSetup&&!!(remoteBlob||localStorage.getItem(ENC_KEY));
   document.getElementById('setup-fields').style.display=has?'none':'block';
   document.getElementById('unlock-fields').style.display=has?'block':'none';
   document.getElementById('reset-link').style.display=has?'inline':'none';
@@ -217,27 +233,33 @@ async function doLogin(){
   document.getElementById('login-error').style.display='none';
   btn.disabled=true;
   try{
-    var saved=localStorage.getItem(ENC_KEY);
+    var saved=forceSetup?null:(remoteBlob||localStorage.getItem(ENC_KEY));
     if(saved){
       var pass=document.getElementById('login-pass').value;
-      try{var tok=await decryptToken(saved,pass);}
+      var tok;
+      try{tok=await decryptToken(saved,pass);}
       catch(e){
         failCount++;
         showLoginErr('Wrong passphrase.'+(failCount>2?' Please wait a few seconds...':''));
         if(failCount>2)await new Promise(function(r){setTimeout(r,Math.min(30000,1000*Math.pow(2,failCount-2)));});
         return;
       }
+      localStorage.setItem(ENC_KEY,saved);
       document.getElementById('login-pass').value='';
+      if(!remoteBlob&&pass.length>=MIN_PASS){try{await publishVault(saved,tok);remoteBlob=saved;}catch(e){}}
       enterApp(tok);
     }else{
       var tk=document.getElementById('login-token').value.trim();
       var p1=document.getElementById('setup-pass').value,p2=document.getElementById('setup-pass2').value;
       if(!tk){showLoginErr('Please enter your GitHub token.');return;}
-      if(p1.length<12){showLoginErr('Passphrase must be at least 12 characters.');return;}
+      if(p1.length<MIN_PASS){showLoginErr('Passphrase must be at least '+MIN_PASS+' characters. Tip: 4 or 5 random words with spaces.');return;}
       if(p1!==p2){showLoginErr('Passphrases do not match.');return;}
       var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO,{headers:{Authorization:'token '+tk,Accept:'application/vnd.github+json'}});
       if(!r.ok){showLoginErr('GitHub rejected that token ('+r.status+'). Nothing was saved.');return;}
-      localStorage.setItem(ENC_KEY,await encryptToken(tk,p1));
+      var blob=await encryptToken(tk,p1);
+      try{await publishVault(blob,tk);}
+      catch(e){showLoginErr('Could not save to the site ('+e.message+'). Check the token has Contents: Read and write.');return;}
+      localStorage.setItem(ENC_KEY,blob);remoteBlob=blob;forceSetup=false;
       localStorage.removeItem('gh_token');
       ['login-token','setup-pass','setup-pass2'].forEach(function(id){document.getElementById(id).value='';});
       enterApp(tk);
@@ -246,8 +268,8 @@ async function doLogin(){
 }
 function resetSaved(e){
   e.preventDefault();
-  if(!confirm('This removes the saved token from this browser. You will need to paste your GitHub token and choose a new passphrase. Continue?'))return;
-  localStorage.removeItem(ENC_KEY);localStorage.removeItem('gh_token');
+  if(!confirm('This lets you enter a new GitHub token and passphrase, replacing the saved ones on every device. Continue?'))return;
+  forceSetup=true;
   document.getElementById('login-error').style.display='none';
   showMode();
 }
@@ -259,12 +281,12 @@ function doLogout(){
 }
 function showLoginErr(m){var e=document.getElementById('login-error');e.textContent=m;e.style.display='block';}
 
-window.addEventListener('load',function(){
+window.addEventListener('load',async function(){
+  remoteBlob=await loadRemoteBlob();
   showMode();
   ['login-pass','setup-pass2'].forEach(function(id){document.getElementById(id).addEventListener('keydown',function(e){if(e.key==='Enter')doLogin();});});
   ['click','keydown','mousemove'].forEach(function(ev){document.addEventListener(ev,function(){if(ghToken)resetIdle();},{passive:true});});
 });
-
 function showScreen(name){
   document.querySelectorAll('[id^=screen-]').forEach(function(s){s.style.display='none';});
   document.getElementById('screen-'+name).style.display='block';
