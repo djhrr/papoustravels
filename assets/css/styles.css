@@ -32,7 +32,7 @@ img{max-width:100%;height:auto;display:block}
 .site-nav a{color:#fff;text-decoration:none;font-size:0.95rem}
 
 /* Mission stripe */
-.mission{background:var(--muted);color:#1b3b4f;padding:10px 16px;border-top:4px solid rgba(0,0,0,0.02)}
+.mission{background:var(--muted);color:var(--mission-text,#1b3b4f);padding:10px 16px;border-top:4px solid rgba(0,0,0,0.02)}
 .mission .inner{max-width:var(--container);margin:0 auto;text-align:center;font-size:0.95rem}
 
 /* Main layout */

@@ -26,6 +26,14 @@ permalink: /admin/
     input[type=text],input[type=date],input[type=password],textarea{width:100%;padding:10px;border:1px solid #ccc;border-radius:6px;font-size:.95rem;font-family:inherit}
     textarea{min-height:120px;resize:vertical}
     .btn{display:inline-block;padding:10px 20px;border:none;border-radius:6px;cursor:pointer;font-size:.9rem;font-weight:600;font-family:inherit;transition:opacity .15s}
+    .theme-group{margin:18px 0 8px;font-weight:600;color:#1a3a5c}
+    .theme-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(170px,1fr));gap:12px}
+    .theme-opt{border:2px solid #ddd;border-radius:8px;padding:10px;cursor:pointer;background:#fff;font-size:.85rem}
+    .theme-opt:hover{border-color:#999}
+    .theme-opt.sel{border-color:#1a3a5c;box-shadow:0 0 0 2px #1a3a5c33}
+    .theme-sw{display:flex;height:26px;border-radius:5px;overflow:hidden;margin-bottom:8px;border:1px solid #0001}
+    .theme-sw span{flex:1}
+    .theme-cur{font-size:.75rem;color:#27ae60;font-weight:600}
     .btn:disabled{opacity:.5;cursor:not-allowed}
     .btn-primary{background:#1a3a5c;color:#fff}
     .btn-secondary{background:#eee;color:#333;border:1px solid #ccc}
@@ -103,6 +111,11 @@ permalink: /admin/
         <h3>Edit Posts</h3>
         <p>Browse, edit, and update existing posts</p>
       </div>
+      <div class="dash-tile" onclick="openTheme()">
+        <div class="icon">&#x1F3A8;</div>
+        <h3>Site Theme</h3>
+        <p>Change the color scheme, or use holiday themes</p>
+      </div>
     </div>
             <div class="card" onclick="window.open('https://analytics.google.com/analytics/web/#/p479244645/reports/intelligenthome','_blank')" style="cursor:pointer">
               <h3>📊 Analytics</h3>
@@ -163,6 +176,24 @@ permalink: /admin/
     <p class="spinner" id="edit-spinner">Saving...</p>
   </div>
 
+  <div id="screen-theme" class="wrap" style="display:none">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
+        <h2 style="margin:0">Site Theme</h2>
+        <button class="btn btn-secondary btn-sm" onclick="showScreen('dashboard')">Back</button>
+      </div>
+      <p class="hint" style="margin:0 0 6px">Classic is the original look and is always available. Pick one, or choose Automatic to show a holiday theme around each US holiday.</p>
+      <p class="hint" id="theme-status" style="margin:0 0 6px">Loading current theme...</p>
+      <div id="theme-body"></div>
+      <div class="field" id="theme-base-row" style="display:none;margin-top:16px">
+        <label>Theme to use when it is not a holiday</label>
+        <select id="theme-base" onchange="themeSel.base=this.value"></select>
+      </div>
+      <p class="error-msg" id="theme-error" style="display:none"></p>
+      <button class="btn btn-green" id="theme-save" onclick="saveTheme()" style="margin-top:16px;padding:12px 24px">Save theme</button>
+      <p class="spinner" id="theme-spinner">Saving...</p>
+    </div>
+  </div>
   <div id="screen-success" class="wrap" style="display:none">
     <div class="card">
       <h2 style="color:#27ae60">Done!</h2>
@@ -174,6 +205,7 @@ permalink: /admin/
   </div>
 </div>
 
+<script src="/assets/js/themes.js"></script>
 <script>
 var OWNER='djhrr',REPO='papoustravels';
 var ghToken='',blockCount=0,editingPath='',editingSha='';
@@ -287,6 +319,56 @@ window.addEventListener('load',async function(){
   ['login-pass','setup-pass2'].forEach(function(id){document.getElementById(id).addEventListener('keydown',function(e){if(e.key==='Enter')doLogin();});});
   ['click','keydown','mousemove'].forEach(function(ev){document.addEventListener(ev,function(){if(ghToken)resetIdle();},{passive:true});});
 });
+var THEME_PATH='src/_data/theme.json',themeSel={theme:'classic',base:'classic'},themeSha;
+function swatch(id){var v=PAPOU_THEMES.themes[id].vars;return '<div class="theme-sw"><span style="background:'+v.banner+'"></span><span style="background:'+v.nav+'"></span><span style="background:'+v.muted+'"></span><span style="background:'+v.teal+'"></span></div>';}
+function themeCard(id,label,sw,cur){return '<div class="theme-opt'+(themeSel.theme===id?' sel':'')+'" data-theme="'+id+'" onclick="pickTheme(\''+id+'\')">'+sw+label+(cur?'<div class="theme-cur">Live now</div>':'')+'</div>';}
+function renderThemes(){
+  var T=PAPOU_THEMES.themes,live=window.liveTheme,h='';
+  var auto='<div class="theme-sw"><span style="background:#c2185b"></span><span style="background:#b22234"></span><span style="background:#e65100"></span><span style="background:#1f5a2c"></span></div>';
+  h+='<div class="theme-group">Automatic</div><div class="theme-grid">'+themeCard('auto','Automatic (holiday themes)',auto,live==='auto')+'</div>';
+  [['color','Color schemes'],['holiday','US holidays']].forEach(function(g){
+    h+='<div class="theme-group">'+g[1]+'</div><div class="theme-grid">';
+    Object.keys(T).forEach(function(id){if(T[id].type===g[0])h+=themeCard(id,T[id].name,swatch(id),live===id);});
+    h+='</div>';
+  });
+  document.getElementById('theme-body').innerHTML=h;
+  var sel=document.getElementById('theme-base'),o='';
+  Object.keys(T).forEach(function(id){if(T[id].type==='color')o+='<option value="'+id+'"'+(themeSel.base===id?' selected':'')+'>'+T[id].name+'</option>';});
+  sel.innerHTML=o;
+  document.getElementById('theme-base-row').style.display=themeSel.theme==='auto'?'block':'none';
+  var today=PAPOU_THEMES.holidayFor(new Date());
+  document.getElementById('theme-status').textContent=themeSel.theme==='auto'
+    ?'Automatic is selected. Today it would show: '+(today?PAPOU_THEMES.themes[today].name:PAPOU_THEMES.themes[themeSel.base].name)+'.'
+    :'Selected: '+PAPOU_THEMES.themes[themeSel.theme].name+'.';
+}
+function pickTheme(id){themeSel.theme=id;renderThemes();}
+async function openTheme(){
+  showScreen('theme');
+  document.getElementById('theme-error').style.display='none';
+  document.getElementById('theme-body').innerHTML='';
+  try{
+    var f=await ghGet(THEME_PATH);themeSha=f.sha;
+    var cur=JSON.parse(decodeURIComponent(escape(atob(f.content.replace(/\n/g,'')))));
+    themeSel={theme:(cur.theme==='auto'||PAPOU_THEMES.themes[cur.theme])?cur.theme:'classic',base:PAPOU_THEMES.themes[cur.base]?cur.base:'classic'};
+  }catch(e){themeSel={theme:'classic',base:'classic'};themeSha=undefined;}
+  window.liveTheme=themeSel.theme;
+  renderThemes();
+}
+async function saveTheme(){
+  var btn=document.getElementById('theme-save'),err=document.getElementById('theme-error');
+  err.style.display='none';btn.disabled=true;document.getElementById('theme-spinner').style.display='block';
+  try{
+    try{themeSha=(await ghGet(THEME_PATH)).sha;}catch(e){themeSha=undefined;}
+    var name=themeSel.theme==='auto'?'Automatic holiday themes':PAPOU_THEMES.themes[themeSel.theme].name;
+    await ghPut(THEME_PATH,strToB64(JSON.stringify({theme:themeSel.theme,base:themeSel.base})+'\n'),'Change site theme: '+name,themeSha);
+    window.liveTheme=themeSel.theme;
+    document.getElementById('success-msg').textContent='Theme set to "'+name+'".';
+    document.getElementById('success-link').href='https://papoustravels.com/';
+    document.getElementById('success-link').textContent='papoustravels.com';
+    showScreen('success');
+  }catch(e){err.textContent='Could not save: '+e.message;err.style.display='block';}
+  finally{btn.disabled=false;document.getElementById('theme-spinner').style.display='none';}
+}
 function showScreen(name){
   document.querySelectorAll('[id^=screen-]').forEach(function(s){s.style.display='none';});
   document.getElementById('screen-'+name).style.display='block';
