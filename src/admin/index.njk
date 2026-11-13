@@ -68,20 +68,20 @@ permalink: /admin/
   <div class="card">
     <h2>Papou Admin</h2>
     <p class="subtitle">Sign in to manage your blog</p>
-    <div class="field"><label>Username</label><input type="text" id="login-user" autofocus></div>
-    <div class="field"><label>Password</label><input type="password" id="login-pass"></div>
-    <details id="token-section">
-      <summary>GitHub Token (required first time)</summary>
-      <div class="field" style="margin-top:8px">
-        <input type="password" id="login-token" placeholder="ghp_...">
-        <p class="hint">Saved to your browser only.</p>
-      </div>
-    </details>
+    <div id="setup-fields" style="display:none">
+      <div class="field"><label>GitHub Token</label><input type="password" id="login-token" placeholder="github_pat_..." autocomplete="off">
+        <p class="hint">Needed once. It is encrypted with your passphrase and stored in this browser only.</p></div>
+      <div class="field"><label>Choose a passphrase (12+ characters)</label><input type="password" id="setup-pass" autocomplete="new-password"></div>
+      <div class="field"><label>Confirm passphrase</label><input type="password" id="setup-pass2" autocomplete="new-password"></div>
+    </div>
+    <div id="unlock-fields" style="display:none">
+      <div class="field"><label>Passphrase</label><input type="password" id="login-pass" autocomplete="current-password"></div>
+    </div>
     <p class="error-msg" id="login-error" style="display:none"></p>
-    <button class="btn btn-primary" style="width:100%;margin-top:8px" onclick="doLogin()">Log In</button>
+    <button class="btn btn-primary" id="login-btn" style="width:100%;margin-top:8px" onclick="doLogin()">Unlock</button>
+    <p style="text-align:center;margin:14px 0 0;font-size:.8rem"><a href="#" id="reset-link" onclick="resetSaved(event)" style="color:#888">Forgot passphrase? Reset and re-enter GitHub token</a></p>
   </div>
 </div>
-
 <div id="app" style="display:none">
   <header>
     <h1>Papou Admin</h1>
@@ -178,24 +178,91 @@ permalink: /admin/
 var OWNER='djhrr',REPO='papoustravels';
 var ghToken='',blockCount=0,editingPath='',editingSha='';
 
-function doLogin(){
-  var user=document.getElementById('login-user').value.trim();
-  var pass=document.getElementById('login-pass').value;
-  var tok=document.getElementById('login-token').value.trim()||localStorage.getItem('gh_token');
-  if(user!=='admin'||pass!=='password'){showLoginErr('Invalid username or password.');return;}
-  if(!tok){showLoginErr('Please enter your GitHub token.');document.getElementById('token-section').open=true;return;}
-  localStorage.setItem('gh_token',tok);ghToken=tok;
+var ENC_KEY='gh_token_enc',failCount=0,idleTimer=null,IDLE_MS=30*60*1000;
+function b64(buf){var a=new Uint8Array(buf),s='';for(var i=0;i<a.length;i++)s+=String.fromCharCode(a[i]);return btoa(s);}
+function unb64(s){var b=atob(s),a=new Uint8Array(b.length);for(var i=0;i<b.length;i++)a[i]=b.charCodeAt(i);return a;}
+async function deriveKey(pass,salt){
+  var base=await crypto.subtle.importKey('raw',new TextEncoder().encode(pass),'PBKDF2',false,['deriveKey']);
+  return crypto.subtle.deriveKey({name:'PBKDF2',salt:salt,iterations:600000,hash:'SHA-256'},base,{name:'AES-GCM',length:256},false,['encrypt','decrypt']);
+}
+async function encryptToken(tok,pass){
+  var salt=crypto.getRandomValues(new Uint8Array(16)),iv=crypto.getRandomValues(new Uint8Array(12));
+  var ct=await crypto.subtle.encrypt({name:'AES-GCM',iv:iv},await deriveKey(pass,salt),new TextEncoder().encode(tok));
+  return JSON.stringify({s:b64(salt),i:b64(iv),c:b64(ct)});
+}
+async function decryptToken(blob,pass){
+  var o=JSON.parse(blob);
+  var pt=await crypto.subtle.decrypt({name:'AES-GCM',iv:unb64(o.i)},await deriveKey(pass,unb64(o.s)),unb64(o.c));
+  return new TextDecoder().decode(pt);
+}
+function showMode(){
+  var has=!!localStorage.getItem(ENC_KEY);
+  document.getElementById('setup-fields').style.display=has?'none':'block';
+  document.getElementById('unlock-fields').style.display=has?'block':'none';
+  document.getElementById('reset-link').style.display=has?'inline':'none';
+  document.getElementById('login-btn').textContent=has?'Unlock':'Save and unlock';
+  var legacy=localStorage.getItem('gh_token');
+  if(!has&&legacy)document.getElementById('login-token').value=legacy;
+}
+function enterApp(tok){
+  ghToken=tok;failCount=0;
   document.getElementById('login-screen').style.display='none';
   document.getElementById('app').style.display='block';
-  showScreen('dashboard');
+  showScreen('dashboard');resetIdle();
 }
-function doLogout(){ghToken='';document.getElementById('app').style.display='none';document.getElementById('login-screen').style.display='flex';}
+function resetIdle(){clearTimeout(idleTimer);idleTimer=setTimeout(doLogout,IDLE_MS);}
+async function doLogin(){
+  var btn=document.getElementById('login-btn');
+  if(btn.disabled)return;
+  document.getElementById('login-error').style.display='none';
+  btn.disabled=true;
+  try{
+    var saved=localStorage.getItem(ENC_KEY);
+    if(saved){
+      var pass=document.getElementById('login-pass').value;
+      try{var tok=await decryptToken(saved,pass);}
+      catch(e){
+        failCount++;
+        showLoginErr('Wrong passphrase.'+(failCount>2?' Please wait a few seconds...':''));
+        if(failCount>2)await new Promise(function(r){setTimeout(r,Math.min(30000,1000*Math.pow(2,failCount-2)));});
+        return;
+      }
+      document.getElementById('login-pass').value='';
+      enterApp(tok);
+    }else{
+      var tk=document.getElementById('login-token').value.trim();
+      var p1=document.getElementById('setup-pass').value,p2=document.getElementById('setup-pass2').value;
+      if(!tk){showLoginErr('Please enter your GitHub token.');return;}
+      if(p1.length<12){showLoginErr('Passphrase must be at least 12 characters.');return;}
+      if(p1!==p2){showLoginErr('Passphrases do not match.');return;}
+      var r=await fetch('https://api.github.com/repos/'+OWNER+'/'+REPO,{headers:{Authorization:'token '+tk,Accept:'application/vnd.github+json'}});
+      if(!r.ok){showLoginErr('GitHub rejected that token ('+r.status+'). Nothing was saved.');return;}
+      localStorage.setItem(ENC_KEY,await encryptToken(tk,p1));
+      localStorage.removeItem('gh_token');
+      ['login-token','setup-pass','setup-pass2'].forEach(function(id){document.getElementById(id).value='';});
+      enterApp(tk);
+    }
+  }finally{btn.disabled=false;}
+}
+function resetSaved(e){
+  e.preventDefault();
+  if(!confirm('This removes the saved token from this browser. You will need to paste your GitHub token and choose a new passphrase. Continue?'))return;
+  localStorage.removeItem(ENC_KEY);localStorage.removeItem('gh_token');
+  document.getElementById('login-error').style.display='none';
+  showMode();
+}
+function doLogout(){
+  ghToken='';clearTimeout(idleTimer);
+  document.getElementById('app').style.display='none';
+  document.getElementById('login-screen').style.display='flex';
+  showMode();
+}
 function showLoginErr(m){var e=document.getElementById('login-error');e.textContent=m;e.style.display='block';}
 
 window.addEventListener('load',function(){
-  var saved=localStorage.getItem('gh_token');
-  if(saved)document.getElementById('login-token').value=saved;
-  document.getElementById('login-pass').addEventListener('keydown',function(e){if(e.key==='Enter')doLogin();});
+  showMode();
+  ['login-pass','setup-pass2'].forEach(function(id){document.getElementById(id).addEventListener('keydown',function(e){if(e.key==='Enter')doLogin();});});
+  ['click','keydown','mousemove'].forEach(function(ev){document.addEventListener(ev,function(){if(ghToken)resetIdle();},{passive:true});});
 });
 
 function showScreen(name){
